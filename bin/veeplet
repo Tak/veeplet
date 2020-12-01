@@ -1,0 +1,7 @@
+#!/usr/bin/env ruby
+
+require 'veeplet/veeplet'
+
+veeplet = Veeplet::Veeplet.new()
+veeplet.enable()
+Gtk.main()
