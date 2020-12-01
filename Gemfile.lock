@@ -3,6 +3,7 @@ PATH
   specs:
     veeplet (0.1.0)
       gtk3
+      ruby-enum
 
 GEM
   remote: https://rubygems.org/
@@ -15,6 +16,7 @@ GEM
     cairo-gobject (3.4.3)
       cairo (>= 1.16.2)
       glib2 (= 3.4.3)
+    concurrent-ruby (1.1.7)
     diff-lcs (1.4.4)
     gdk3 (3.4.3)
       cairo-gobject (= 3.4.3)
@@ -35,6 +37,8 @@ GEM
       gdk_pixbuf2 (= 3.4.3)
       gio2 (= 3.4.3)
       pango (= 3.4.3)
+    i18n (1.8.5)
+      concurrent-ruby (~> 1.0)
     native-package-installer (1.0.9)
     pango (3.4.3)
       cairo-gobject (= 3.4.3)
@@ -54,6 +58,8 @@ GEM
       diff-lcs (>= 1.2.0, < 2.0)
       rspec-support (~> 3.10.0)
     rspec-support (3.10.0)
+    ruby-enum (0.8.0)
+      i18n
 
 PLATFORMS
   ruby
