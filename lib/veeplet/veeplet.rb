@@ -41,22 +41,30 @@ module Veeplet
       get_output_of_command("openvpn3 config-import --config #{Credentials::CONFIG_PATH} --name #{Credentials::CONFIG_NAME} --persistent")
     end
 
-    def prompt_response(io, prompt_pattern, response)
+    def read_prompt(io, prompt_pattern)
+      # 5-second timeout
+      wait_time = Time.now + 10
       read_length = 8192
       output = ''
-      while output.empty?
+      while Time.now < wait_time && !output.match?(prompt_pattern)
         # Wait until we're ready to read
         IO.select([io])
-        output = io.read_nonblock(read_length, :exception => false).chomp()
+        read = io.read_nonblock(read_length, :exception => false)
+        output += read if read
       end
 
-      # puts(output)
-      return false unless output.match?(prompt_pattern)
+      unless output.match?(prompt_pattern)
+        puts("Got non-matching output:\n#{output}")
+        return false
+      end
+      yield output
+      return true
+    end
 
+    def write_response(io, response)
       # Wait until we're ready to write
       IO.select(nil, [io])
       io.write_nonblock("#{response}\n", :exception => false)
-      return true
     end
 
     def start_session(username, password, two_factor)
@@ -75,19 +83,27 @@ module Veeplet
       end
 
       IO.popen("openvpn3 session-start --config #{Credentials::CONFIG_NAME}", 'r+') do |io|
-        unless prompt_response(io, USERNAME_PATTERN, username)
+        unless read_prompt(io, USERNAME_PATTERN) { |prompt| write_response(io, username) }
           puts("Error starting session, couldn't get username prompt")
           return false
         end
-        unless prompt_response(io, PASSWORD_PATTERN, password)
+        unless read_prompt(io, PASSWORD_PATTERN){ |prompt| write_response(io, password) }
           puts("Error starting session, couldn't get password prompt")
           return false
         end
 
         # This is allowed to fail, there may not be a two-factor prompt
-        prompt_response(io, TWO_FACTOR_PATTERN, two_factor)
-
+        read_prompt(io, TWO_FACTOR_PATTERN){ |prompt| write_response(io, two_factor) }
         return true
+      end
+    end
+
+    def resume()
+      IO.popen("openvpn3 session-manage --resume --config #{Credentials::CONFIG_NAME}", 'r+') do |io|
+        # There may or may not be a two-factor prompt here
+        read_prompt(io, TWO_FACTOR_PATTERN){ |prompt|
+          UI.prompt_two_factor(){ |two_factor| write_response(io, two_factor) }
+        }
       end
     end
 
@@ -99,7 +115,7 @@ module Veeplet
       when ConnectionStatus::Disconnected
         UI.authenticate { |username, password, two_factor| start_session(username, password, two_factor) }
       when ConnectionStatus::Paused
-        get_output_of_command("openvpn3 session-manage --resume --config #{Credentials::CONFIG_NAME}")
+        resume()
       else
         puts("Don't know how to connect when current status is #{@status}")
       end
