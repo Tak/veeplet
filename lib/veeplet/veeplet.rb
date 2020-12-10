@@ -102,7 +102,7 @@ module Veeplet
       IO.popen("openvpn3 session-manage --resume --config #{Credentials::CONFIG_NAME}", 'r+') do |io|
         # There may or may not be a two-factor prompt here
         read_prompt(io, TWO_FACTOR_PATTERN){ |prompt|
-          UI.prompt_two_factor(){ |two_factor| write_response(io, two_factor) }
+          UI.prompt_two_factor("Authenticate #{Credentials::CONFIG_NAME}"){ |two_factor| write_response(io, two_factor) }
         }
       end
     end
@@ -111,9 +111,9 @@ module Veeplet
       case @status
       when ConnectionStatus::Unconfigured
         load_configuration()
-        UI.authenticate { |username, password, two_factor| start_session(username, password, two_factor) }
+        UI.authenticate("Authenticate #{Credentials::CONFIG_NAME}") { |username, password, two_factor| start_session(username, password, two_factor) }
       when ConnectionStatus::Disconnected
-        UI.authenticate { |username, password, two_factor| start_session(username, password, two_factor) }
+        UI.authenticate("Authenticate #{Credentials::CONFIG_NAME}") { |username, password, two_factor| start_session(username, password, two_factor) }
       when ConnectionStatus::Paused
         resume()
       else
