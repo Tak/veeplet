@@ -9,10 +9,11 @@ module Veeplet
       return builder
     end
 
-    def self.authenticate()
+    def self.authenticate(title)
       builder = load_builder()
 
       dialog = builder['dialog_authentication']
+      dialog.title = title
       response = dialog.run()
       username = nil
       password = nil
@@ -26,13 +27,14 @@ module Veeplet
       yield username, password, two_factor
     end
 
-    def self.prompt_two_factor()
+    def self.prompt_two_factor(title)
       builder = load_builder()
       ['label_username', 'entry_username', 'label_password', 'label_password'].each do |thing|
         builder[thing].hide()
       end
 
       dialog = builder['dialog_authentication']
+      dialog.title = title
       response = dialog.run()
       two_factor = nil
       if response == Gtk::ResponseType::OK
