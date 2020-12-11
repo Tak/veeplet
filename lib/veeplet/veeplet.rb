@@ -204,7 +204,10 @@ module Veeplet
       update_status_icon(@status)
 
       # Refresh every 10s in case there's a network change not triggered by us
-      GLib::Timeout.add(10000){ refresh_display() }
+      GLib::Timeout.add(10000) do
+        refresh_display()
+        true
+      end
     end
   end
 end
