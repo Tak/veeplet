@@ -30,11 +30,15 @@ module Veeplet
       sessions = get_output_of_command('openvpn3 sessions-list')
       return ConnectionStatus::Disconnected unless sessions.match?(SESSION_PATTERN)
 
-      return ConnectionStatus::Connected if sessions.match?(CONNECTED_PATTERN)
-      return ConnectionStatus::Paused if sessions.match?(PAUSED_PATTERN)
-
-      # Unknown, better act like we're disconnected
-      return ConnectionStatus::Disconnected
+      case sessions
+      when CONNECTED_PATTERN
+        ConnectionStatus::Connected
+      when PAUSED_PATTERN
+        ConnectionStatus::Paused
+      else
+        # Unknown, better act like we're disconnected
+        ConnectionStatus::NeedsRestart
+      end
     end
 
     def load_configuration()
@@ -107,6 +111,38 @@ module Veeplet
       end
     end
 
+    # TODO: Refactor this after more exercise
+    def restart_session(username, password, two_factor)
+      if !username || !password
+        puts("Invalid username or password")
+        return false
+      end
+
+      username.chomp!()
+      password.chomp!()
+      two_factor.chomp!() if two_factor
+
+      if username.empty? || password.empty?
+        puts("Invalid username or password")
+        return false
+      end
+
+      IO.popen("openvpn3 session-manage --restart --config #{Credentials::CONFIG_NAME}", 'r+') do |io|
+        unless read_prompt(io, USERNAME_PATTERN) { |prompt| write_response(io, username) }
+          puts("Error starting session, couldn't get username prompt")
+          return false
+        end
+        unless read_prompt(io, PASSWORD_PATTERN){ |prompt| write_response(io, password) }
+          puts("Error starting session, couldn't get password prompt")
+          return false
+        end
+
+        # This is allowed to fail, there may not be a two-factor prompt
+        read_prompt(io, TWO_FACTOR_PATTERN){ |prompt| write_response(io, two_factor) }
+        return true
+      end
+    end
+
     def connect()
       case @status
       when ConnectionStatus::Unconfigured
@@ -116,6 +152,8 @@ module Veeplet
         UI.authenticate("Authenticate #{Credentials::CONFIG_NAME}") { |username, password, two_factor| start_session(username, password, two_factor) }
       when ConnectionStatus::Paused
         resume()
+      when ConnectionStatus::NeedsRestart
+        UI.authenticate("Authenticate #{Credentials::CONFIG_NAME}") { |username, password, two_factor| restart_session(username, password, two_factor) }
       else
         puts("Don't know how to connect when current status is #{@status}")
       end

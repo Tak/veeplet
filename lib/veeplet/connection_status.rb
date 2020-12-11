@@ -7,4 +7,5 @@ class ConnectionStatus
   define :Connected, 'Connected'
   define :Disconnected, 'Disconnected'
   define :Paused, 'Paused'
+  define :NeedsRestart, 'Needs Restart'
 end
