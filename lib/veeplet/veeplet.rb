@@ -1,4 +1,8 @@
 require 'gtk3'
+require 'etc'
+require 'open3'
+require 'urika'
+
 require_relative 'connection_status'
 require_relative 'credentials'
 require_relative 'ui'
@@ -7,153 +11,67 @@ module Veeplet
   class Veeplet
     DISCONNECTED_STOCK_ID = 'gtk-no'
     CONNECTED_STOCK_ID = 'gtk-yes'
-    CONFIGURATION_PATTERN = Regexp.new("^-----.*\\s#{Credentials::CONFIG_NAME}", Regexp::MULTILINE)
-    SESSION_PATTERN = Regexp.new("^-----.*\\sConfig name: #{Credentials::CONFIG_NAME}", Regexp::MULTILINE)
-    CONNECTED_PATTERN = Regexp.new('Status: Connection, Client connected', Regexp::MULTILINE)
-    PAUSED_PATTERN = Regexp.new('Status: Connection, Client connection paused', Regexp::MULTILINE)
-    USERNAME_PATTERN = Regexp.new('auth user\s*name:', Regexp::MULTILINE | Regexp::IGNORECASE)
-    PASSWORD_PATTERN = Regexp.new('auth password:', Regexp::MULTILINE | Regexp::IGNORECASE)
-    TWO_FACTOR_PATTERN = Regexp.new('second factor:', Regexp::MULTILINE | Regexp::IGNORECASE)
 
-    def get_output_of_command(command)
-      output = nil
-      IO.popen(command) { |io|
-        output = io.read().chomp()
-      }
-      output
+    def self.check_program_using_help(program)
+      begin
+        pid = Process.spawn("#{program} --help")
+        Process.wait(pid)
+        return $?.exitstatus == 0
+      rescue
+      end
+      false
+    end
+
+    def self.get_valid_elevator()
+      if (check_program_using_help('gksu'))
+        "gksu --sudo-mode --message 'Elevated privileges are required to switch the selected graphics card' --"
+      elsif (check_program_using_help('pkexec'))
+        'pkexec'
+      else
+        # Not sure whether it's better to override a rarely configured askpass
+        # or to try to guess one
+        "sudo -HA --"
+      end
+    end
+
+    def get_output_of_command(command, elevator = nil)
+      final_command = elevator ? "#{elevator} #{command}" : command
+      IO.popen(final_command) do |io|
+        io.read().chomp()
+      end
     end
 
     def query()
-      configs = get_output_of_command('openvpn3 configs-list')
-      return ConnectionStatus::Unconfigured unless configs.match?(CONFIGURATION_PATTERN)
+      hostname = get_output_of_command("hostname")
+      user = Etc.getlogin
+      connections = get_output_of_command("tailscale status")
+      my_connections = connections.split(/[\r\n]/).select do |line|
+        fields = line.split
+        fields.size > 2 &&
+          fields[1].match?(hostname) &&
+          fields[2].match?(/#{user}@/)
+      end
 
-      sessions = get_output_of_command('openvpn3 sessions-list')
-      return ConnectionStatus::Disconnected unless sessions.match?(SESSION_PATTERN)
-
-      case sessions
-      when CONNECTED_PATTERN
-        ConnectionStatus::Connected
-      when PAUSED_PATTERN
-        ConnectionStatus::Paused
+      if my_connections.empty?
+        ConnectionStatus::Disconnected
       else
-        # Unknown, better act like we're disconnected
-        ConnectionStatus::NeedsRestart
+        ConnectionStatus::Connected
       end
     end
 
-    def load_configuration()
-      get_output_of_command("openvpn3 config-import --config #{Credentials::CONFIG_PATH} --name #{Credentials::CONFIG_NAME} --persistent")
-    end
-
-    def read_prompt(io, prompt_pattern)
-      # 5-second timeout
-      wait_time = Time.now + 10
-      read_length = 8192
-      output = ''
-      while Time.now < wait_time && !output.match?(prompt_pattern)
-        # Wait until we're ready to read
-        IO.select([io])
-        read = io.read_nonblock(read_length, :exception => false)
-        output += read if read
-      end
-
-      unless output.match?(prompt_pattern)
-        puts("Got non-matching output:\n#{output}")
-        return false
-      end
-      yield output
-      return true
-    end
-
-    def write_response(io, response)
-      # Wait until we're ready to write
-      IO.select(nil, [io])
-      io.write_nonblock("#{response}\n", :exception => false)
-    end
-
-    def start_session(username, password, two_factor)
-      if !username || !password
-        puts("Invalid username or password")
-        return false
-      end
-
-      username.chomp!()
-      password.chomp!()
-      two_factor.chomp!() if two_factor
-
-      if username.empty? || password.empty?
-        puts("Invalid username or password")
-        return false
-      end
-
-      IO.popen("openvpn3 session-start --config #{Credentials::CONFIG_NAME}", 'r+') do |io|
-        unless read_prompt(io, USERNAME_PATTERN) { |prompt| write_response(io, username) }
-          puts("Error starting session, couldn't get username prompt")
-          return false
+    def start_session()
+      Open3.popen2e("#{Veeplet.get_valid_elevator} tailscale up --accept-routes") do |_, out_and_err, _|
+        while (line = out_and_err.gets)
+          url = Urika.get_first_url(line)
+          get_output_of_command("xdg-open \"https://#{url}\"") if url
         end
-        unless read_prompt(io, PASSWORD_PATTERN){ |prompt| write_response(io, password) }
-          puts("Error starting session, couldn't get password prompt")
-          return false
-        end
-
-        # This is allowed to fail, there may not be a two-factor prompt
-        read_prompt(io, TWO_FACTOR_PATTERN){ |prompt| write_response(io, two_factor) }
-        return true
-      end
-    end
-
-    def resume()
-      IO.popen("openvpn3 session-manage --resume --config #{Credentials::CONFIG_NAME}", 'r+') do |io|
-        # There may or may not be a two-factor prompt here
-        read_prompt(io, TWO_FACTOR_PATTERN){ |prompt|
-          UI.prompt_two_factor("Authenticate #{Credentials::CONFIG_NAME}"){ |two_factor| write_response(io, two_factor) }
-        }
-      end
-    end
-
-    # TODO: Refactor this after more exercise
-    def restart_session(username, password, two_factor)
-      if !username || !password
-        puts("Invalid username or password")
-        return false
-      end
-
-      username.chomp!()
-      password.chomp!()
-      two_factor.chomp!() if two_factor
-
-      if username.empty? || password.empty?
-        puts("Invalid username or password")
-        return false
-      end
-
-      IO.popen("openvpn3 session-manage --restart --config #{Credentials::CONFIG_NAME}", 'r+') do |io|
-        unless read_prompt(io, USERNAME_PATTERN) { |prompt| write_response(io, username) }
-          puts("Error starting session, couldn't get username prompt")
-          return false
-        end
-        unless read_prompt(io, PASSWORD_PATTERN){ |prompt| write_response(io, password) }
-          puts("Error starting session, couldn't get password prompt")
-          return false
-        end
-
-        # This is allowed to fail, there may not be a two-factor prompt
-        read_prompt(io, TWO_FACTOR_PATTERN){ |prompt| write_response(io, two_factor) }
-        return true
       end
     end
 
     def connect()
       case @status
-      when ConnectionStatus::Unconfigured
-        load_configuration()
-        UI.authenticate("Authenticate #{Credentials::CONFIG_NAME}") { |username, password, two_factor| start_session(username, password, two_factor) }
       when ConnectionStatus::Disconnected
-        UI.authenticate("Authenticate #{Credentials::CONFIG_NAME}") { |username, password, two_factor| start_session(username, password, two_factor) }
-      when ConnectionStatus::Paused
-        resume()
-      when ConnectionStatus::NeedsRestart
-        UI.authenticate("Authenticate #{Credentials::CONFIG_NAME}") { |username, password, two_factor| restart_session(username, password, two_factor) }
+        start_session
       else
         puts("Don't know how to connect when current status is #{@status}")
       end
@@ -162,7 +80,7 @@ module Veeplet
 
     def disconnect()
       puts("Warning: trying to disconnect when state is #{@status}") unless @status == ConnectionStatus::Connected
-      get_output_of_command("openvpn3 session-manage --pause --config #{Credentials::CONFIG_NAME}")
+      get_output_of_command("tailscale down", Veeplet.get_valid_elevator)
       refresh_display()
     end
 
@@ -179,7 +97,7 @@ module Veeplet
 
     def update_status_icon(status)
       @icon.stock = status == ConnectionStatus::Connected ? CONNECTED_STOCK_ID : DISCONNECTED_STOCK_ID
-      @icon.tooltip_text = "OpenVPN (#{status})"
+      @icon.tooltip_text = "Tailscale (#{status})"
     end
 
     def enable()

@@ -3,8 +3,9 @@ require 'gtk3'
 module Veeplet
   class UI
     def self.load_builder()
+      ui_definition = Pathname.new(__FILE__).parent.parent.parent.join('ui.glade')
       builder = Gtk::Builder.new()
-      builder.add_from_file('ui.glade')
+      builder.add_from_file(ui_definition.to_s)
       builder.connect_signals{ |handler| method(handler) }
       return builder
     end

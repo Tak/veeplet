@@ -25,4 +25,6 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency 'gtk3'
   spec.add_dependency 'ruby-enum'
+  spec.add_dependency 'open3'
+  spec.add_dependency 'urika'
 end
